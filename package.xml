@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>franka_moveit_compliant_control</name>
+  <version>0.1.0</version>
+  <description>MoveIt-based Cartesian trajectory executor with compliant controller configuration for Franka FR3.</description>
+  <maintainer email="user@example.com">User</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>moveit_ros_planning_interface</depend>
+  <depend>moveit_msgs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>franka_fr3_moveit_config</exec_depend>
+  <exec_depend>franka_gripper</exec_depend>
+  <exec_depend>franka_description</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
