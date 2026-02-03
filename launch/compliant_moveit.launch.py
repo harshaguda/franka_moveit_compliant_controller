@@ -33,6 +33,7 @@ def generate_launch_description():
     namespace_parameter_name = "namespace"
     load_gripper_parameter_name = "load_gripper"
     ee_id_parameter_name = "ee_id"
+    planning_mode_parameter_name = "planning_mode"
 
     robot_ip = LaunchConfiguration(robot_ip_parameter_name)
     use_fake_hardware = LaunchConfiguration(use_fake_hardware_parameter_name)
@@ -40,6 +41,7 @@ def generate_launch_description():
     namespace = LaunchConfiguration(namespace_parameter_name)
     load_gripper = LaunchConfiguration(load_gripper_parameter_name)
     ee_id = LaunchConfiguration(ee_id_parameter_name)
+    planning_mode = LaunchConfiguration(planning_mode_parameter_name)
 
     db_arg = DeclareLaunchArgument("db", default_value="False", description="Database flag")
 
@@ -269,6 +271,11 @@ def generate_launch_description():
             use_fake_hardware_parameter_name
         ),
     )
+    planning_mode_arg = DeclareLaunchArgument(
+        planning_mode_parameter_name,
+        default_value="cartesian",
+        description="Trajectory planning mode: cartesian or planning",
+    )
 
     gripper_launch_file = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -293,6 +300,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {"move_group": "fr3_arm"},
+            {"planning_mode": planning_mode},
             robot_description,
             robot_description_semantic,
             kinematics_yaml,
@@ -307,6 +315,7 @@ def generate_launch_description():
             ee_id_arg,
             use_fake_hardware_arg,
             fake_sensor_commands_arg,
+            planning_mode_arg,
             db_arg,
             robot_state_publisher,
             run_move_group_node,
