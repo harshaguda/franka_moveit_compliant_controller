@@ -1,4 +1,3 @@
-
 Launch controller
 
 ```
@@ -15,7 +14,7 @@ ros2 topic pub --once /cartesian_trajectory geometry_msgs/msg/PoseArray "{header
 Take the robot to initial dressing position
 
 ```
-ros2 topic pub --once /cartesian_trajectory geometry_msgs/msg/PoseArray "{header: {frame_id: 'fr3_link0'}, poses: [{position: {x: 0.45, y: 0.045, z: 0.35}, orientation: {x: -0.7071, y: 0.7071, z: 0.0, w: 0.0}}]}"
+ros2 topic pub --once /cartesian_trajectory geometry_msgs/msg/PoseArray "{header: {frame_id: 'fr3_link0'}, poses: [{position: {x: 0.45, y: -0.15, z: 0.35}, orientation: {x: -0.7071, y: 0.7071, z: 0.0, w: 0.0}}]}"
 ```
 
 Dressing Start
@@ -37,4 +36,16 @@ ros2 topic pub --once /cartesian_trajectory geometry_msgs/msg/PoseArray "{header
 ```
 pkill -f joint_state_publisher || true
 ros2 daemon stop && ros2 daemon start
+```
+
+Use Bolt planner for constrained planning (e.g. dressing):
+
+```
+ros2 launch franka_moveit_compliant_control compliant_moveit.launch.py robot_ip:=<robot_ip> lock_orientation:=true planner_id:=BoltConfigDefault
+```
+
+Use Descartes planning pipeline (requires descartes capability to be configured):
+
+```
+ros2 launch franka_moveit_compliant_control compliant_moveit.launch.py robot_ip:=<robot_ip> planning_pipeline:=descartes
 ```
