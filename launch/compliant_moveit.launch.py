@@ -34,6 +34,9 @@ def generate_launch_description():
     load_gripper_parameter_name = "load_gripper"
     ee_id_parameter_name = "ee_id"
     planning_mode_parameter_name = "planning_mode"
+    planner_id_parameter_name = "planner_id"
+    planning_pipeline_parameter_name = "planning_pipeline"
+    lock_orientation_parameter_name = "lock_orientation"
 
     robot_ip = LaunchConfiguration(robot_ip_parameter_name)
     use_fake_hardware = LaunchConfiguration(use_fake_hardware_parameter_name)
@@ -42,6 +45,9 @@ def generate_launch_description():
     load_gripper = LaunchConfiguration(load_gripper_parameter_name)
     ee_id = LaunchConfiguration(ee_id_parameter_name)
     planning_mode = LaunchConfiguration(planning_mode_parameter_name)
+    planner_id = LaunchConfiguration(planner_id_parameter_name)
+    planning_pipeline = LaunchConfiguration(planning_pipeline_parameter_name)
+    lock_orientation = LaunchConfiguration(lock_orientation_parameter_name)
 
     db_arg = DeclareLaunchArgument("db", default_value="False", description="Database flag")
 
@@ -276,6 +282,21 @@ def generate_launch_description():
         default_value="cartesian",
         description="Trajectory planning mode: cartesian or planning",
     )
+    planner_id_arg = DeclareLaunchArgument(
+        planner_id_parameter_name,
+        default_value="",
+        description="MoveIt planner ID (e.g., BoltConfigDefault).",
+    )
+    planning_pipeline_arg = DeclareLaunchArgument(
+        planning_pipeline_parameter_name,
+        default_value="",
+        description="MoveIt planning pipeline ID (e.g., ompl, pilz_industrial_motion_planner, descartes).",
+    )
+    lock_orientation_arg = DeclareLaunchArgument(
+        lock_orientation_parameter_name,
+        default_value="false",
+        description="Whether to lock the end effector orientation to the current state",
+    )
 
     gripper_launch_file = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -301,6 +322,9 @@ def generate_launch_description():
         parameters=[
             {"move_group": "fr3_arm"},
             {"planning_mode": planning_mode},
+            {"planner_id": planner_id},
+            {"planning_pipeline": planning_pipeline},
+            {"lock_orientation": lock_orientation},
             robot_description,
             robot_description_semantic,
             kinematics_yaml,
@@ -316,6 +340,9 @@ def generate_launch_description():
             use_fake_hardware_arg,
             fake_sensor_commands_arg,
             planning_mode_arg,
+            planner_id_arg,
+            planning_pipeline_arg,
+            lock_orientation_arg,
             db_arg,
             robot_state_publisher,
             run_move_group_node,

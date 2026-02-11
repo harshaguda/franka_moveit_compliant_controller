@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
                                   : node->declare_parameter<double>("jump_threshold", 0.0);
   const auto min_fraction = node->has_parameter("min_fraction")
                                 ? node->get_parameter("min_fraction").as_double()
-                                : node->declare_parameter<double>("min_fraction", 0.9);
+                                : node->declare_parameter<double>("min_fraction", 0.65);
   const auto velocity_scaling = node->has_parameter("velocity_scaling")
                                     ? node->get_parameter("velocity_scaling").as_double()
                                     : node->declare_parameter<double>("velocity_scaling", 0.2);
@@ -42,6 +42,12 @@ int main(int argc, char** argv) {
   const auto planning_mode = node->has_parameter("planning_mode")
                                  ? node->get_parameter("planning_mode").as_string()
                                  : node->declare_parameter<std::string>("planning_mode", "planning");
+  const auto planner_id = node->has_parameter("planner_id")
+                                 ? node->get_parameter("planner_id").as_string()
+                                 : node->declare_parameter<std::string>("planner_id", "");
+  const auto planning_pipeline = node->has_parameter("planning_pipeline")
+                                     ? node->get_parameter("planning_pipeline").as_string()
+                                     : node->declare_parameter<std::string>("planning_pipeline", "");
     const auto use_joint_constraints = node->has_parameter("use_joint_constraints")
                    ? node->get_parameter("use_joint_constraints").as_bool()
                    : node->declare_parameter<bool>("use_joint_constraints", true);
@@ -50,15 +56,18 @@ int main(int argc, char** argv) {
                       .as_double()
                     : node->declare_parameter<double>(
                       "joint_constraint_tolerance", 0.35);
+    const auto lock_orientation = node->has_parameter("lock_orientation")
+                    ? node->get_parameter("lock_orientation").as_bool()
+                  : node->declare_parameter<bool>("lock_orientation", false);
 
   moveit::planning_interface::MoveGroupInterface move_group(node, move_group_name);
   move_group.setMaxVelocityScalingFactor(velocity_scaling);
   move_group.setMaxAccelerationScalingFactor(accel_scaling);
-
     auto sub = node->create_subscription<geometry_msgs::msg::PoseArray>(
       "cartesian_trajectory", rclcpp::SystemDefaultsQoS(),
       [node, &move_group, eef_step, jump_threshold, min_fraction, planning_mode,
-       use_joint_constraints, joint_constraint_tolerance](
+       use_joint_constraints, joint_constraint_tolerance,
+       planner_id, planning_pipeline, lock_orientation](
           geometry_msgs::msg::PoseArray::SharedPtr msg) {
         if (msg->poses.empty()) {
           RCLCPP_WARN(node->get_logger(), "Received empty PoseArray on cartesian_trajectory");
@@ -71,7 +80,7 @@ int main(int argc, char** argv) {
 
         for (const auto& p : msg->poses) {
           geometry_msgs::msg::Pose pose = p;
-          if (is_zero_orientation(pose.orientation)) {
+          if (lock_orientation || is_zero_orientation(pose.orientation)) {
             pose.orientation = current_pose.orientation;
           }
           waypoints.push_back(pose);
@@ -94,6 +103,24 @@ int main(int argc, char** argv) {
                 constraints.joint_constraints.push_back(jc);
               }
               move_group.setPathConstraints(constraints);
+            } else if (lock_orientation) {
+                moveit_msgs::msg::Constraints constraints;
+                moveit_msgs::msg::OrientationConstraint oc;
+                oc.link_name = move_group.getEndEffectorLink();
+                oc.header.frame_id = move_group.getPlanningFrame();
+                oc.orientation = current_pose.orientation;
+                oc.absolute_x_axis_tolerance = 0.05; // Tight tolerance for dressing task
+                oc.absolute_y_axis_tolerance = 0.05;
+                oc.absolute_z_axis_tolerance = 0.05;
+                oc.weight = 1.0;
+                constraints.orientation_constraints.push_back(oc);
+                move_group.setPathConstraints(constraints);
+            }
+            if (!planner_id.empty()) {
+              move_group.setPlannerId(planner_id);
+            }
+            if (!planning_pipeline.empty()) {
+              move_group.setPlanningPipelineId(planning_pipeline);
             }
             move_group.setPoseTarget(pose);
             moveit::planning_interface::MoveGroupInterface::Plan plan;
