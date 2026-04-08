@@ -49,3 +49,16 @@ Use Descartes planning pipeline (requires descartes capability to be configured)
 ```
 ros2 launch franka_moveit_compliant_control compliant_moveit.launch.py robot_ip:=<robot_ip> planning_pipeline:=descartes
 ```
+
+Attention-aware interruption/pause during execution:
+
+- The executor now listens to `/engagement/status` (configurable via `attention_status_topic`).
+- If `pause_when_not_attention:=true` (default), an active MoveIt trajectory is interrupted with `stop()` as soon as attention is lost.
+- Execution resumes automatically once attention is back by replanning from the robot's current pose to the pending waypoint.
+
+Useful parameters (set on `cartesian_trajectory_executor`):
+
+- `attention_status_topic` (default: `/engagement/status`)
+- `pause_when_not_attention` (default: `true`)
+- `attention_ok_values` (default: `['1', 'true', 'paying_attention']`)
+- `attention_poll_ms` (default: `50`)

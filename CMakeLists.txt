@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_msgs REQUIRED)
 
@@ -15,6 +16,7 @@ add_executable(cartesian_trajectory_executor src/cartesian_trajectory_executor.c
 ament_target_dependencies(cartesian_trajectory_executor
   rclcpp
   geometry_msgs
+  std_msgs
   moveit_ros_planning_interface
   moveit_msgs
 )
