@@ -309,51 +309,41 @@ int main(int argc, char** argv) {
           }
           RCLCPP_INFO(node->get_logger(), "Planned and executed %zu waypoint(s).", waypoints.size());
         } else {
-          for (size_t waypoint_idx = 0; waypoint_idx < waypoints.size(); ++waypoint_idx) {
-            const auto& target_pose = waypoints[waypoint_idx];
-            bool reached_target = false;
-            while (rclcpp::ok() && !reached_target) {
-              wait_for_attention(node, *attention_ok, pause_when_not_attention, poll_period);
-              if (!rclcpp::ok()) {
-                trajectory_busy->store(false);
-                return;
-              }
-
-              std::vector<geometry_msgs::msg::Pose> segment_waypoints;
-              segment_waypoints.push_back(target_pose);
-
-              moveit_msgs::msg::RobotTrajectory trajectory;
-              const double fraction = move_group.computeCartesianPath(
-                  segment_waypoints, eef_step, jump_threshold, trajectory, true);
-              if (fraction < min_fraction) {
-                RCLCPP_WARN(node->get_logger(),
-                            "Cartesian segment fraction %.3f below threshold %.3f at waypoint %zu/%zu.",
-                            fraction, min_fraction, waypoint_idx + 1, waypoints.size());
-                trajectory_busy->store(false);
-                return;
-              }
-
-              moveit::planning_interface::MoveGroupInterface::Plan plan;
-              plan.trajectory_ = trajectory;
-
-              const auto segment_desc =
-                  "cartesian waypoint " + std::to_string(waypoint_idx + 1) + "/" +
-                  std::to_string(waypoints.size());
-              const bool executed = execute_with_attention_pause(
-                  node, move_group, plan, *attention_ok, pause_when_not_attention,
-                  poll_period, segment_desc);
-
-              if (!executed) {
-                if (pause_when_not_attention && !attention_ok->load()) {
-                  continue;
-                }
-                trajectory_busy->store(false);
-                return;
-              }
-              reached_target = true;
-            }
+          wait_for_attention(node, *attention_ok, pause_when_not_attention, poll_period);
+          if (!rclcpp::ok()) {
+            trajectory_busy->store(false);
+            return;
           }
-          RCLCPP_INFO(node->get_logger(), "Cartesian trajectory executed successfully.");
+
+          moveit_msgs::msg::RobotTrajectory trajectory;
+          
+          // Pass the entire 'waypoints' vector at once rather than looping
+          const double fraction = move_group.computeCartesianPath(
+              waypoints, eef_step, jump_threshold, trajectory, true);
+              
+          if (fraction < min_fraction) {
+            RCLCPP_WARN(node->get_logger(),
+                        "Cartesian path fraction %.3f below threshold %.3f.",
+                        fraction, min_fraction);
+            trajectory_busy->store(false);
+            return;
+          }
+
+          moveit::planning_interface::MoveGroupInterface::Plan plan;
+          plan.trajectory_ = trajectory;
+
+          const std::string segment_desc = "continuous cartesian path";
+          
+          // Execute the single, continuous trajectory
+          const bool executed = execute_with_attention_pause(
+              node, move_group, plan, *attention_ok, pause_when_not_attention,
+              poll_period, segment_desc);
+
+          if (!executed) {
+            RCLCPP_WARN(node->get_logger(), "Continuous trajectory execution interrupted or failed.");
+          } else {
+            RCLCPP_INFO(node->get_logger(), "Cartesian trajectory executed successfully.");
+          }
         }
 
         trajectory_busy->store(false);
