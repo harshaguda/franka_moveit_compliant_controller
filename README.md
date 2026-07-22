@@ -3,8 +3,12 @@ Launch controller
 ```
 source install/setup.bash 
 ros2 launch franka_moveit_compliant_control compliant_moveit.launch.py robot_ip:=172.18.0.2
+ros2 launch franka_moveit_compliant_control compliant_moveit.launch.py robot_ip:=192.168.101.2 planning_pipeline:=descartes load_gripper:=true
+```
 ```
 
+ros2 action send_goal -f /franka_gripper/grasp franka_msgs/action/Grasp "{width: 0.04, speed: 0.03, force: 50}"
+```
 Example trajectory to test the controller
 
 ```
@@ -16,6 +20,8 @@ Take the robot to initial dressing position
 ```
 ros2 topic pub --once /cartesian_trajectory geometry_msgs/msg/PoseArray "{header: {frame_id: 'fr3_link0'}, poses: [{position: {x: 0.45, y: -0.15, z: 0.35}, orientation: {x: -0.7071, y: 0.7071, z: 0.0, w: 0.0}}]}"
 ```
+
+ros2 topic pub --once /cartesian_trajectory geometry_msgs/msg/PoseArray "{header: {frame_id: 'fr3_link0'}, poses: [{position: {x: 0.45, y: -0.3, z: 0.1}, orientation: {x: 0.7071, y: 0.7071, z: 0.0, w: 0.0}}]}"
 
 Dressing Start
 

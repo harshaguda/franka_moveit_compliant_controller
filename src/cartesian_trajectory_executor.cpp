@@ -16,6 +16,7 @@
 #include <moveit_msgs/msg/robot_trajectory.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/bool.hpp>  // Added for synchronization signal
 
 namespace {
 bool is_zero_orientation(const geometry_msgs::msg::Quaternion& q) {
@@ -193,23 +194,38 @@ int main(int argc, char** argv) {
       },
       attention_sub_options);
 
+  // Added: Publisher to notify the Python node when a chunk finishes executing or fails
+  auto status_pub = node->create_publisher<std_msgs::msg::Bool>("trajectory_done", 10);
+
   rclcpp::SubscriptionOptions trajectory_sub_options;
   trajectory_sub_options.callback_group = trajectory_cb_group;
+  
+  // Note: status_pub is now added to the capture list
   auto sub = node->create_subscription<geometry_msgs::msg::PoseArray>(
       "cartesian_trajectory", rclcpp::SystemDefaultsQoS(),
       [node, &move_group, eef_step, jump_threshold, min_fraction, planning_mode,
        use_joint_constraints, joint_constraint_tolerance, planner_id, planning_pipeline,
        lock_orientation, pause_when_not_attention, poll_period,
-       attention_ok, trajectory_busy](geometry_msgs::msg::PoseArray::SharedPtr msg) {
+       attention_ok, trajectory_busy, status_pub](geometry_msgs::msg::PoseArray::SharedPtr msg) {
+        
         if (msg->poses.empty()) {
           RCLCPP_WARN(node->get_logger(), "Received empty PoseArray on cartesian_trajectory");
           return;
         }
 
+        // We do not want to publish "done" here, because the previous chunk is still running
         if (trajectory_busy->exchange(true)) {
           RCLCPP_WARN(node->get_logger(), "Trajectory already executing. Ignoring new command.");
           return;
         }
+
+        // Helper function to safely unlock and notify the Python node
+        auto release_lock = [trajectory_busy, status_pub]() {
+          std_msgs::msg::Bool done_msg;
+          done_msg.data = true; 
+          status_pub->publish(done_msg);
+          trajectory_busy->store(false);
+        };
 
         auto current_pose = move_group.getCurrentPose().pose;
         std::vector<geometry_msgs::msg::Pose> waypoints;
@@ -225,7 +241,7 @@ int main(int argc, char** argv) {
 
         wait_for_attention(node, *attention_ok, pause_when_not_attention, poll_period);
         if (!rclcpp::ok()) {
-          trajectory_busy->store(false);
+          release_lock();
           return;
         }
 
@@ -238,7 +254,7 @@ int main(int argc, char** argv) {
               if (!rclcpp::ok()) {
                 move_group.clearPoseTargets();
                 move_group.clearPathConstraints();
-                trajectory_busy->store(false);
+                release_lock();
                 return;
               }
 
@@ -284,7 +300,7 @@ int main(int argc, char** argv) {
                 RCLCPP_WARN(node->get_logger(), "Planning failed with code %d", plan_result.val);
                 move_group.clearPoseTargets();
                 move_group.clearPathConstraints();
-                trajectory_busy->store(false);
+                release_lock();
                 return;
               }
 
@@ -301,7 +317,7 @@ int main(int argc, char** argv) {
                 if (pause_when_not_attention && !attention_ok->load()) {
                   continue;
                 }
-                trajectory_busy->store(false);
+                release_lock();
                 return;
               }
               reached_target = true;
@@ -311,13 +327,12 @@ int main(int argc, char** argv) {
         } else {
           wait_for_attention(node, *attention_ok, pause_when_not_attention, poll_period);
           if (!rclcpp::ok()) {
-            trajectory_busy->store(false);
+            release_lock();
             return;
           }
 
           moveit_msgs::msg::RobotTrajectory trajectory;
           
-          // Pass the entire 'waypoints' vector at once rather than looping
           const double fraction = move_group.computeCartesianPath(
               waypoints, eef_step, jump_threshold, trajectory, true);
               
@@ -325,7 +340,7 @@ int main(int argc, char** argv) {
             RCLCPP_WARN(node->get_logger(),
                         "Cartesian path fraction %.3f below threshold %.3f.",
                         fraction, min_fraction);
-            trajectory_busy->store(false);
+            release_lock();
             return;
           }
 
@@ -334,7 +349,6 @@ int main(int argc, char** argv) {
 
           const std::string segment_desc = "continuous cartesian path";
           
-          // Execute the single, continuous trajectory
           const bool executed = execute_with_attention_pause(
               node, move_group, plan, *attention_ok, pause_when_not_attention,
               poll_period, segment_desc);
@@ -346,7 +360,8 @@ int main(int argc, char** argv) {
           }
         }
 
-        trajectory_busy->store(false);
+        // Final unlock and notify upon successful completion
+        release_lock();
       });
 
   rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
