@@ -309,6 +309,12 @@ def generate_launch_description():
             use_fake_hardware_parameter_name
         ),
     )
+    pause_topic_arg = DeclareLaunchArgument(
+        "pause_topic",
+        default_value="/dress/motion_gate",
+        description="Topic the executor pauses on ('1' = move, '0' = pause). "
+        "dress_node publishes /dress/motion_gate; /engagement/status is the old raw attention label.",
+    )
     planning_mode_arg = DeclareLaunchArgument(
         planning_mode_parameter_name,
         default_value="cartesian",
@@ -339,6 +345,7 @@ def generate_launch_description():
         parameters=[
             {"move_group": "fr3_arm"},
             {"planning_mode": planning_mode},
+            {"attention_status_topic": LaunchConfiguration("pause_topic")},
             robot_description,
             robot_description_semantic,
             kinematics_yaml,
@@ -376,6 +383,7 @@ def generate_launch_description():
             use_fake_hardware_arg,
             fake_sensor_commands_arg,
             planning_mode_arg,
+            pause_topic_arg,
             db_arg,
             gazebo_empty_world,
             clock_bridge,

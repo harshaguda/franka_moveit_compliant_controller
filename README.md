@@ -52,7 +52,7 @@ ros2 launch franka_moveit_compliant_control compliant_moveit.launch.py robot_ip:
 
 Attention-aware interruption/pause during execution:
 
-- The executor now listens to `/engagement/status` (configurable via `attention_status_topic`).
+- The launch files point the executor at `/dress/motion_gate` (launch argument `pause_topic`), the single pause signal published by `colab_dress` `dress_node` (`'1'` = move, `'0'` = pause). Use `pause_topic:=/engagement/status` for the old behaviour of pausing on the raw attention label.
 - If `pause_when_not_attention:=true` (default), an active MoveIt trajectory is interrupted with `stop()` as soon as attention is lost.
 - Execution resumes automatically once attention is back by replanning from the robot's current pose to the pending waypoint.
 
