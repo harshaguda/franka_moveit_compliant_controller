@@ -52,10 +52,9 @@ def generate_launch_description():
     db_arg = DeclareLaunchArgument("db", default_value="False", description="Database flag")
 
     franka_xacro_file = os.path.join(
-        get_package_share_directory("franka_description"),
-        "robots",
-        "fr3",
-        "fr3.urdf.xacro",
+        get_package_share_directory("franka_bringup"),
+        "urdf",
+        "franka_arm.urdf.xacro",
     )
 
     robot_description_config = Command(
@@ -73,7 +72,7 @@ def generate_launch_description():
             use_fake_hardware,
             " fake_sensor_commands:=",
             fake_sensor_commands,
-            " ros2_control:=true",
+            " robot_type:=fr3",
         ]
     )
 
@@ -283,6 +282,18 @@ def generate_launch_description():
         description="Topic the executor pauses on ('1' = move, '0' = pause). "
         "dress_node publishes /dress/motion_gate; /engagement/status is the old raw attention label.",
     )
+    continuous_execution_arg = DeclareLaunchArgument(
+        "continuous_execution",
+        default_value="false",
+        description="Run all received waypoints as one motion, without stopping at each. "
+        "Start dmp_node with continuous_execution too (study_trial.launch.py continuous:=true).",
+    )
+    cartesian_speed_arg = DeclareLaunchArgument(
+        "cartesian_speed",
+        default_value="0.03",
+        description="Average end-effector speed in m/s when continuous_execution is on. "
+        "Can only slow the motion down: velocity_scaling remains the upper limit.",
+    )
     planning_mode_arg = DeclareLaunchArgument(
         planning_mode_parameter_name,
         default_value="cartesian",
@@ -329,6 +340,10 @@ def generate_launch_description():
             {"move_group": "fr3_arm"},
             {"planning_mode": planning_mode},
             {"attention_status_topic": LaunchConfiguration("pause_topic")},
+            {"continuous_execution": ParameterValue(
+                LaunchConfiguration("continuous_execution"), value_type=bool)},
+            {"cartesian_speed": ParameterValue(
+                LaunchConfiguration("cartesian_speed"), value_type=float)},
             {"planner_id": planner_id},
             {"planning_pipeline": planning_pipeline},
             {"lock_orientation": lock_orientation},
@@ -341,6 +356,8 @@ def generate_launch_description():
     return LaunchDescription(
         [
             robot_arg,
+            continuous_execution_arg,
+            cartesian_speed_arg,
             namespace_arg,
             load_gripper_arg,
             ee_id_arg,

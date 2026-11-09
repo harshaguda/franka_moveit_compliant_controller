@@ -3,6 +3,10 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -102,6 +106,110 @@ void wait_for_attention(
     RCLCPP_INFO(node->get_logger(), "User attention recovered. Resuming trajectory.");
   }
 }
+
+double distance(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b) {
+  return std::sqrt(
+      (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
+}
+
+// The part of the path still ahead of the arm: everything after the nearest waypoint, so
+// resuming or replacing a path never sends the arm back. The last waypoint always stays.
+std::vector<geometry_msgs::msg::Pose> waypoints_ahead(
+    const std::vector<geometry_msgs::msg::Pose>& waypoints,
+    const geometry_msgs::msg::Point& current) {
+  size_t nearest = 0;
+  double best = std::numeric_limits<double>::max();
+  for (size_t i = 0; i < waypoints.size(); ++i) {
+    const double d = distance(waypoints[i].position, current);
+    if (d < best) {
+      best = d;
+      nearest = i;
+    }
+  }
+  const size_t start = std::min(nearest + 1, waypoints.size() - 1);
+  return {waypoints.begin() + static_cast<std::ptrdiff_t>(start), waypoints.end()};
+}
+
+double path_length(
+    const std::vector<geometry_msgs::msg::Pose>& waypoints,
+    const geometry_msgs::msg::Point& start) {
+  double length = 0.0;
+  geometry_msgs::msg::Point previous = start;
+  for (const auto& pose : waypoints) {
+    length += distance(previous, pose.position);
+    previous = pose.position;
+  }
+  return length;
+}
+
+// Stretch a trajectory so it averages speed_m_s. It only ever slows down, so the planner's
+// velocity and acceleration limits still hold whatever speed is asked for.
+double slow_to_speed(
+    moveit_msgs::msg::RobotTrajectory& trajectory, double length_m, double speed_m_s) {
+  auto& points = trajectory.joint_trajectory.points;
+  if (points.empty() || speed_m_s <= 0.0) {
+    return 1.0;
+  }
+  const auto& last = points.back().time_from_start;
+  const double duration = last.sec + last.nanosec * 1e-9;
+  if (duration <= 0.0) {
+    return 1.0;
+  }
+  const double factor = length_m / speed_m_s / duration;
+  if (factor <= 1.0) {
+    return 1.0;
+  }
+  for (auto& point : points) {
+    const double t = (point.time_from_start.sec + point.time_from_start.nanosec * 1e-9) * factor;
+    point.time_from_start.sec = static_cast<int32_t>(std::floor(t));
+    point.time_from_start.nanosec = static_cast<uint32_t>((t - std::floor(t)) * 1e9);
+    for (auto& v : point.velocities) {
+      v /= factor;
+    }
+    for (auto& a : point.accelerations) {
+      a /= factor * factor;
+    }
+  }
+  return factor;
+}
+
+enum class ExecutionEnd { kFinished, kAttentionLost, kNewPath, kFailed };
+
+ExecutionEnd execute_until_interrupted(
+    moveit::planning_interface::MoveGroupInterface& move_group,
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan,
+    const std::atomic<bool>& attention_ok,
+    bool pause_when_not_attention,
+    const std::atomic<uint64_t>& latest_path,
+    uint64_t running_path,
+    const std::chrono::milliseconds& poll_period) {
+  std::atomic<bool> execute_done{false};
+  moveit::core::MoveItErrorCode execute_result = moveit::core::MoveItErrorCode::FAILURE;
+  std::thread exec_thread([&move_group, &plan, &execute_done, &execute_result]() {
+    execute_result = move_group.execute(plan);
+    execute_done.store(true);
+  });
+
+  auto end = ExecutionEnd::kFinished;
+  while (rclcpp::ok() && !execute_done.load()) {
+    if (pause_when_not_attention && !attention_ok.load()) {
+      end = ExecutionEnd::kAttentionLost;
+    } else if (latest_path.load() != running_path) {
+      end = ExecutionEnd::kNewPath;
+    } else {
+      std::this_thread::sleep_for(poll_period);
+      continue;
+    }
+    move_group.stop();
+    break;
+  }
+  exec_thread.join();
+
+  if (end == ExecutionEnd::kFinished && execute_result != moveit::core::MoveItErrorCode::SUCCESS) {
+    return ExecutionEnd::kFailed;
+  }
+  return end;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -160,6 +268,21 @@ int main(int argc, char** argv) {
       : node->declare_parameter<std::vector<std::string>>(
             "attention_ok_values", {"1", "true", "paying_attention"});
 
+  const auto continuous_execution = node->has_parameter("continuous_execution")
+      ? node->get_parameter("continuous_execution").as_bool()
+      : node->declare_parameter<bool>("continuous_execution", false);
+  auto cartesian_speed = node->has_parameter("cartesian_speed")
+      ? node->get_parameter("cartesian_speed").as_double()
+      : node->declare_parameter<double>("cartesian_speed", 0.03);
+  const auto execution_status_topic = node->has_parameter("execution_status_topic")
+      ? node->get_parameter("execution_status_topic").as_string()
+      : node->declare_parameter<std::string>(
+            "execution_status_topic", "/cartesian_trajectory_status");
+  if (continuous_execution && cartesian_speed <= 0.0) {
+    RCLCPP_ERROR(node->get_logger(), "cartesian_speed must be above 0, using 0.03 m/s.");
+    cartesian_speed = 0.03;
+  }
+
   moveit::planning_interface::MoveGroupInterface move_group(node, move_group_name);
   move_group.setMaxVelocityScalingFactor(velocity_scaling);
   move_group.setMaxAccelerationScalingFactor(accel_scaling);
@@ -193,6 +316,19 @@ int main(int argc, char** argv) {
       },
       attention_sub_options);
 
+  // Continuous mode: the callback only stores the newest path; a worker thread runs it as
+  // one motion and can stop it for a pause or a replacement path.
+  std::mutex latest_waypoints_mutex;
+  std::vector<geometry_msgs::msg::Pose> latest_waypoints;
+  std::atomic<uint64_t> latest_path{0};
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr execution_status_pub;
+  if (continuous_execution) {
+    execution_status_pub = node->create_publisher<std_msgs::msg::String>(
+        execution_status_topic, rclcpp::QoS(10).reliable());
+    RCLCPP_INFO(
+        node->get_logger(), "Continuous execution on, at up to %.3f m/s.", cartesian_speed);
+  }
+
   rclcpp::SubscriptionOptions trajectory_sub_options;
   trajectory_sub_options.callback_group = trajectory_cb_group;
   auto sub = node->create_subscription<geometry_msgs::msg::PoseArray>(
@@ -200,9 +336,17 @@ int main(int argc, char** argv) {
       [node, &move_group, eef_step, jump_threshold, min_fraction, planning_mode,
        use_joint_constraints, joint_constraint_tolerance, planner_id, planning_pipeline,
        lock_orientation, pause_when_not_attention, poll_period,
-       attention_ok, trajectory_busy](geometry_msgs::msg::PoseArray::SharedPtr msg) {
+       attention_ok, trajectory_busy, continuous_execution, &latest_waypoints_mutex,
+       &latest_waypoints, &latest_path](geometry_msgs::msg::PoseArray::SharedPtr msg) {
         if (msg->poses.empty()) {
           RCLCPP_WARN(node->get_logger(), "Received empty PoseArray on cartesian_trajectory");
+          return;
+        }
+
+        if (continuous_execution) {
+          std::lock_guard<std::mutex> lock(latest_waypoints_mutex);
+          latest_waypoints = msg->poses;
+          latest_path.fetch_add(1);
           return;
         }
 
@@ -359,9 +503,100 @@ int main(int argc, char** argv) {
         trajectory_busy->store(false);
       });
 
+  std::thread continuous_worker;
+  if (continuous_execution) {
+    continuous_worker = std::thread(
+        [node, &move_group, eef_step, jump_threshold, min_fraction, lock_orientation,
+         pause_when_not_attention, poll_period, attention_ok, cartesian_speed,
+         execution_status_pub, &latest_waypoints_mutex, &latest_waypoints, &latest_path]() {
+          const auto report = [&execution_status_pub](const std::string& status) {
+            std_msgs::msg::String msg;
+            msg.data = status;
+            execution_status_pub->publish(msg);
+          };
+          uint64_t running_path = 0;
+          bool has_work = false;
+          std::vector<geometry_msgs::msg::Pose> waypoints;
+
+          while (rclcpp::ok()) {
+            if (latest_path.load() != running_path) {
+              std::lock_guard<std::mutex> lock(latest_waypoints_mutex);
+              waypoints = latest_waypoints;
+              running_path = latest_path.load();
+              has_work = true;
+            }
+            if (!has_work) {
+              std::this_thread::sleep_for(poll_period);
+              continue;
+            }
+
+            wait_for_attention(node, *attention_ok, pause_when_not_attention, poll_period);
+            if (!rclcpp::ok()) {
+              break;
+            }
+            if (latest_path.load() != running_path) {
+              continue;
+            }
+
+            const auto current_pose = move_group.getCurrentPose().pose;
+            auto ahead = waypoints_ahead(waypoints, current_pose.position);
+            if (lock_orientation) {
+              for (auto& pose : ahead) {
+                pose.orientation = current_pose.orientation;
+              }
+            }
+            for (auto& pose : ahead) {
+              if (is_zero_orientation(pose.orientation)) {
+                pose.orientation = current_pose.orientation;
+              }
+            }
+
+            moveit_msgs::msg::RobotTrajectory trajectory;
+            const double fraction = move_group.computeCartesianPath(
+                ahead, eef_step, jump_threshold, trajectory, true);
+            if (fraction < min_fraction) {
+              RCLCPP_WARN(node->get_logger(),
+                          "Cartesian path fraction %.3f below threshold %.3f. Dropping the path.",
+                          fraction, min_fraction);
+              report("failed");
+              has_work = false;
+              continue;
+            }
+            if (fraction < 1.0) {
+              RCLCPP_WARN(node->get_logger(),
+                          "Cartesian path covers only %.3f of the path; the arm will stop short.",
+                          fraction);
+            }
+
+            const double length = path_length(ahead, current_pose.position) * fraction;
+            const double factor = slow_to_speed(trajectory, length, cartesian_speed);
+            RCLCPP_INFO(node->get_logger(),
+                        "Running %zu waypoint(s), %.3f m, slowed down by %.2f.",
+                        ahead.size(), length, factor);
+
+            moveit::planning_interface::MoveGroupInterface::Plan plan;
+            plan.trajectory_ = trajectory;
+            const auto end = execute_until_interrupted(
+                move_group, plan, *attention_ok, pause_when_not_attention, latest_path,
+                running_path, poll_period);
+            if (end == ExecutionEnd::kFinished) {
+              report("finished");
+              has_work = false;
+            } else if (end == ExecutionEnd::kFailed) {
+              RCLCPP_WARN(node->get_logger(), "Execution of the continuous path failed.");
+              report("failed");
+              has_work = false;
+            }
+          }
+        });
+  }
+
   rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
   executor.add_node(node);
   executor.spin();
   rclcpp::shutdown();
+  if (continuous_worker.joinable()) {
+    continuous_worker.join();
+  }
   return 0;
 }
