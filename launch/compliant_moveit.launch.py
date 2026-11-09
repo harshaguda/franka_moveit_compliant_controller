@@ -294,6 +294,19 @@ def generate_launch_description():
         description="Average end-effector speed in m/s when continuous_execution is on. "
         "Can only slow the motion down: velocity_scaling remains the upper limit.",
     )
+    max_path_deviation_arg = DeclareLaunchArgument(
+        "max_path_deviation",
+        default_value="0.01",
+        description="How far (m) the planned hand position may be from the commanded straight-line "
+        "path. A path where IK switches arm configuration and the hand swings off is cut there. "
+        "0 turns the check off.",
+    )
+    max_orientation_deviation_arg = DeclareLaunchArgument(
+        "max_orientation_deviation",
+        default_value="0.05",
+        description="How far (rad) the planned hand orientation may be from the commanded one. "
+        "0 turns the check off.",
+    )
     planning_mode_arg = DeclareLaunchArgument(
         planning_mode_parameter_name,
         default_value="cartesian",
@@ -344,6 +357,10 @@ def generate_launch_description():
                 LaunchConfiguration("continuous_execution"), value_type=bool)},
             {"cartesian_speed": ParameterValue(
                 LaunchConfiguration("cartesian_speed"), value_type=float)},
+            {"max_path_deviation": ParameterValue(
+                LaunchConfiguration("max_path_deviation"), value_type=float)},
+            {"max_orientation_deviation": ParameterValue(
+                LaunchConfiguration("max_orientation_deviation"), value_type=float)},
             {"planner_id": planner_id},
             {"planning_pipeline": planning_pipeline},
             {"lock_orientation": lock_orientation},
@@ -363,6 +380,8 @@ def generate_launch_description():
             ee_id_arg,
             use_fake_hardware_arg,
             fake_sensor_commands_arg,
+            max_path_deviation_arg,
+            max_orientation_deviation_arg,
             planning_mode_arg,
             pause_topic_arg,
             planner_id_arg,

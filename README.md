@@ -62,3 +62,9 @@ Useful parameters (set on `cartesian_trajectory_executor`):
 - `pause_when_not_attention` (default: `true`)
 - `attention_ok_values` (default: `['1', 'true', 'paying_attention']`)
 - `attention_poll_ms` (default: `50`)
+
+Keeping the hand on the path (dressing):
+
+- Every Cartesian path is checked by forward kinematics before it runs. The hand must stay within `max_path_deviation` (default 0.01 m) and `max_orientation_deviation` (default 0.05 rad) of the commanded straight-line path, including between trajectory points. The elbow may move freely. If IK switches arm configuration partway along (the whole arm swings and the hand leaves the path and comes back), the path is cut before that point and the warning `The hand would leave the path ...` is logged. If less than `min_fraction` of the path remains, nothing is executed. Set both to 0 to turn the check off.
+- The usual cause is joint 7 reaching its limit. With the orientation fixed, moving the hand sideways turns joint 1, and joint 7 has to counter-rotate by about the same amount. From the home in `colab_dress/config/home.yaml` (joint 7 = -2.36 rad, limit -3.02), a sweep toward +y is fine, but toward -y joint 7 runs out at about y = -0.3 m.
+- The current hand pose comes from the executor's own `joint_states` subscription. MoveGroupInterface's state monitor never delivered a state in this node, so `getCurrentPose()` returned the identity pose. A trajectory is refused while there is no joint state from the last second.
