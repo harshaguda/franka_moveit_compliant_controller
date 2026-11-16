@@ -337,13 +337,62 @@ double compute_on_path_cartesian_path(
   const double kept_fraction = (kept < 2 || full_length <= 0.0)
       ? 0.0
       : fraction * hand_path_length(model, planning_frame, ee_link, joint_trajectory, kept) / full_length;
+
+  // position_off is where the hand first crosses the tolerance, which says little about how far
+  // it would go. Report the worst point after the cut, and the joint closest to its limit there:
+  // an arm configuration switch moves the hand tens of centimetres.
+  double worst_position = position_off;
+  double worst_angle = angle_off;
+  {
+    moveit::core::RobotState state(model);
+    state.setToDefaultValues();
+    const auto& points = joint_trajectory.points;
+    std::vector<PathSegment> segments;
+    const Eigen::Isometry3d start =
+        hand_pose(state, planning_frame, ee_link, joint_trajectory, points[0].positions);
+    Eigen::Vector3d p_prev = start.translation();
+    Eigen::Quaterniond q_prev(start.rotation());
+    for (const auto& w : waypoints) {
+      const Eigen::Vector3d p(w.position.x, w.position.y, w.position.z);
+      const Eigen::Quaterniond q = to_eigen(w.orientation);
+      segments.push_back({p_prev, p, q_prev, q});
+      p_prev = p;
+      q_prev = q;
+    }
+    for (size_t i = kept; i < total; ++i) {
+      double p_off = 0.0;
+      double a_off = 0.0;
+      path_deviation(
+          hand_pose(state, planning_frame, ee_link, joint_trajectory, points[i].positions), segments,
+          max_position, max_angle, p_off, a_off);
+      worst_position = std::max(worst_position, p_off);
+      worst_angle = std::max(worst_angle, a_off);
+    }
+  }
+  std::string limit_joint = "none";
+  double limit_margin = std::numeric_limits<double>::max();
+  for (size_t j = 0; j < joint_trajectory.joint_names.size(); ++j) {
+    const auto& bounds = model->getVariableBounds(joint_trajectory.joint_names[j]);
+    if (!bounds.position_bounded_) {
+      continue;
+    }
+    for (size_t i = kept > 0 ? kept - 1 : 0; i < std::min(kept + 1, total); ++i) {
+      const double q = joint_trajectory.points[i].positions[j];
+      const double margin = std::min(q - bounds.min_position_, bounds.max_position_ - q);
+      if (margin < limit_margin) {
+        limit_margin = margin;
+        limit_joint = joint_trajectory.joint_names[j];
+      }
+    }
+  }
   RCLCPP_WARN(
       node->get_logger(),
       "The hand would leave the path after point %zu/%zu (usually IK switching arm "
-      "configuration, e.g. at a joint limit): "
-      "%.4f m and %.3f rad off (allowed %.4f m, %.3f rad). Cutting the path there: %.3f of "
-      "it is kept.",
-      kept, total, position_off, angle_off, max_position, max_angle, kept_fraction);
+      "configuration, e.g. at a joint limit): it crosses the allowed %.4f m / %.3f rad and goes "
+      "up to %.3f m and %.3f rad off. Joint closest to a limit there: %s, %.3f rad from it. "
+      "Cutting the path there: %.3f of it is kept.",
+      kept, total, max_position, max_angle, worst_position, worst_angle, limit_joint.c_str(),
+      limit_margin, kept_fraction);
   if (kept < 2) {
     joint_trajectory.points.clear();
     return 0.0;
