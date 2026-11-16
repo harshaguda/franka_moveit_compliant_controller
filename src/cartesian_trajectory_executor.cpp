@@ -44,6 +44,25 @@ std::string normalize_label(const std::string& input) {
   return out;
 }
 
+// Stop a running move_group.execute() and wait until it has returned. One stop() is not
+// enough: sent before MoveIt has handed the trajectory to the controller, it does nothing and
+// the whole trajectory then runs (rehearsal 16 Nov 2026: the gate closed during planning, and
+// the arm ran its full 25 s path with the gate closed). So stop() is repeated until execute()
+// returns.
+void stop_until_done(
+    moveit::planning_interface::MoveGroupInterface& move_group,
+    const std::atomic<bool>& execute_done,
+    const std::chrono::milliseconds& poll_period) {
+  const auto retry = std::chrono::milliseconds(100);
+  while (!execute_done.load()) {
+    move_group.stop();
+    const auto until = std::chrono::steady_clock::now() + retry;
+    while (!execute_done.load() && std::chrono::steady_clock::now() < until) {
+      std::this_thread::sleep_for(std::min(poll_period, std::chrono::milliseconds(10)));
+    }
+  }
+}
+
 bool execute_with_attention_pause(
     rclcpp::Node::SharedPtr node,
     moveit::planning_interface::MoveGroupInterface& move_group,
@@ -67,7 +86,7 @@ bool execute_with_attention_pause(
           node->get_logger(),
           "Attention lost during %s. Stopping active trajectory segment.",
           segment_desc.c_str());
-      move_group.stop();
+      stop_until_done(move_group, execute_done, poll_period);
       interrupted_for_attention = true;
       break;
     }
@@ -511,7 +530,7 @@ ExecutionEnd execute_until_interrupted(
       std::this_thread::sleep_for(poll_period);
       continue;
     }
-    move_group.stop();
+    stop_until_done(move_group, execute_done, poll_period);
     break;
   }
   exec_thread.join();
@@ -944,6 +963,14 @@ int main(int argc, char** argv) {
             RCLCPP_INFO(node->get_logger(),
                         "Running %zu waypoint(s), %.3f m, slowed down by %.2f.",
                         ahead.size(), length, factor);
+
+            // Planning takes up to a second: attention or the path may have changed meanwhile.
+            // Go round again (wait for attention, re-plan from where the arm is) rather than
+            // start a motion that should not run.
+            if ((pause_when_not_attention && !attention_ok->load()) ||
+                latest_path.load() != running_path) {
+              continue;
+            }
 
             moveit::planning_interface::MoveGroupInterface::Plan plan;
             plan.trajectory_ = trajectory;
