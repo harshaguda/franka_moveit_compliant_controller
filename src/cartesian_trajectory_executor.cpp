@@ -914,18 +914,29 @@ int main(int argc, char** argv) {
             const double fraction = compute_on_path_cartesian_path(
                 node, move_group, ahead, eef_step, jump_threshold, max_path_deviation,
                 max_orientation_deviation, velocity_scaling, accel_scaling, trajectory);
-            if (fraction < min_fraction) {
+            // MoveIt's fraction counts the waypoints planned, out of those still ahead. Judge
+            // it against the whole path instead: otherwise a resume part-way along fails for
+            // the same unreachable end that the first plan accepted (it was 0.77 at the start,
+            // 0.46 when resumed from the middle, both stopping at the same point).
+            const size_t segments = waypoints.size() > 1 ? waypoints.size() - 1 : 1;
+            const size_t behind = segments > ahead.size() ? segments - ahead.size() : 0;
+            const double overall =
+                (static_cast<double>(behind) + fraction * static_cast<double>(ahead.size())) /
+                static_cast<double>(segments);
+            if (fraction <= 0.0 || overall < min_fraction) {
               RCLCPP_WARN(node->get_logger(),
-                          "Cartesian path fraction %.3f below threshold %.3f. Dropping the path.",
-                          fraction, min_fraction);
+                          "Cartesian path fraction %.3f of the remaining path (%.3f of the whole "
+                          "path) below threshold %.3f. Dropping the path.",
+                          fraction, overall, min_fraction);
               report("failed");
               has_work = false;
               continue;
             }
             if (fraction < 1.0) {
               RCLCPP_WARN(node->get_logger(),
-                          "Cartesian path covers only %.3f of the path; the arm will stop short.",
-                          fraction);
+                          "Cartesian path covers only %.3f of the remaining path (%.3f of the "
+                          "whole path); the arm will stop short.",
+                          fraction, overall);
             }
 
             const double length = path_length(ahead, current_pose.position) * fraction;
